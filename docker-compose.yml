@@ -1,0 +1,139 @@
+x-app: &app
+  build: .
+  image: switch-fastapp:local
+  init: true
+  restart: unless-stopped
+  environment: &app-env
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: 5432
+    POSTGRES_DB: ${POSTGRES_DB:-switch}
+    POSTGRES_USER: ${POSTGRES_USER:-switch}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    KAFKA_TOPIC: ${KAFKA_TOPIC:-source.orders.v1}
+    KAFKA_GROUP_ID: ${KAFKA_GROUP_ID:-orders-materializer-v1}
+    CONSUMER_EXCLUSIVE: ${CONSUMER_EXCLUSIVE:-false}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    DEPENDENCY_TIMEOUT_SECONDS: ${DEPENDENCY_TIMEOUT_SECONDS:-60}
+    SOURCE_NAME: ${SOURCE_NAME:-snowflake.orders_source}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redpanda:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+    topic-init:
+      condition: service_completed_successfully
+
+x-worker-health: &worker-health
+  test: ["CMD", "python", "-m", "app.healthcheck", "worker"]
+  interval: 10s
+  timeout: 15s
+  retries: 3
+  start_period: 90s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-switch}
+      POSTGRES_USER: ${POSTGRES_USER:-switch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.18
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "127.0.0.1:19092:19092"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info", "-X", "brokers=localhost:9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  topic-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.18
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'rpk topic describe "$$KAFKA_TOPIC" -X brokers=redpanda:9092 || rpk topic create "$$KAFKA_TOPIC" --partitions 3 --replicas 1 -X brokers=redpanda:9092'
+    environment:
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-source.orders.v1}
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  migrate:
+    <<: *app
+    command: ["python", "-m", "app.db.migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  adapter:
+    <<: *app
+    command: ["python", "-m", "app.adapter.main"]
+    stop_grace_period: 25s
+    environment:
+      <<: *app-env
+      KAFKA_DELIVERY_TIMEOUT_MS: ${KAFKA_DELIVERY_TIMEOUT_MS:-10000}
+      KAFKA_PUBLISH_ATTEMPTS: ${KAFKA_PUBLISH_ATTEMPTS:-4}
+      KAFKA_RETRY_BASE_SECONDS: ${KAFKA_RETRY_BASE_SECONDS:-0.5}
+      KAFKA_RETRY_MAX_SECONDS: ${KAFKA_RETRY_MAX_SECONDS:-5}
+      KAFKA_SHUTDOWN_TIMEOUT_SECONDS: ${KAFKA_SHUTDOWN_TIMEOUT_SECONDS:-5}
+      SYNC_BATCH_SIZE: ${SYNC_BATCH_SIZE:-500}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-30}
+      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT:-}
+      SNOWFLAKE_USER: ${SNOWFLAKE_USER:-}
+      SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD:-}
+      SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE:-}
+      SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE:-SWITCH_DEMO}
+      SNOWFLAKE_SCHEMA: ${SNOWFLAKE_SCHEMA:-PUBLIC}
+      SNOWFLAKE_TABLE: ${SNOWFLAKE_TABLE:-ORDERS_SOURCE}
+      SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE:-}
+    healthcheck: *worker-health
+
+  consumer:
+    <<: *app
+    command: ["python", "-m", "app.consumer.main"]
+    healthcheck: *worker-health
+
+  api:
+    <<: *app
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5)"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  postgres-data:
+  redpanda-data:

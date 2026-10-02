@@ -1,0 +1,40 @@
+# Isolated fault-injection stack, no ports or existing volumes.
+services:
+  broker:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.18
+    command: [redpanda, start, --smp=1, --memory=512M, --reserve-memory=0M, --overprovisioned, --node-id=0, --check=false, --kafka-addr=0.0.0.0:9092, --advertise-kafka-addr=broker:9092]
+    healthcheck:
+      test: [CMD, rpk, cluster, info, -X, brokers=localhost:9092]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: isolated-test-only
+    healthcheck:
+      test: [CMD, pg_isready, -U, postgres]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  runner:
+    image: switch-fastapp:local
+    build:
+      context: ..
+    working_dir: /tmp
+    volumes:
+      - ..:/workspace:ro
+      - ${REVIEW_SIGNAL_DIR:?Set REVIEW_SIGNAL_DIR}:/signals
+    environment:
+      PYTHONPATH: /workspace
+      POSTGRES_HOST: db
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: isolated-test-only
+      KAFKA_BOOTSTRAP_SERVERS: broker:9092
+      KAFKA_TOPIC: review.orders
+      KAFKA_DELIVERY_TIMEOUT_MS: 2000
+      KAFKA_PUBLISH_ATTEMPTS: 2
+      KAFKA_RETRY_BASE_SECONDS: 0.1
+      KAFKA_RETRY_MAX_SECONDS: 0.2
+      REVIEW_SIGNAL_DIR: /signals

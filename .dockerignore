@@ -1,0 +1,15 @@
+.git
+.venv
+.uv-cache
+.env
+.env.*
+!.env.example
+.idea
+.proxyai
+.aws
+.codex
+.agents
+__pycache__
+.pytest_cache
+*.egg-info
+docs_use

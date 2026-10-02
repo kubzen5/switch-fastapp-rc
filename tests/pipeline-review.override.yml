@@ -1,0 +1,23 @@
+# Used only with docker-compose.yml, in a fresh disposable project.
+services:
+  postgres:
+    ports: !reset []
+  redpanda:
+    ports: !reset []
+  api:
+    ports: !reset []
+  adapter:
+    working_dir: /tmp
+    volumes:
+      - ${REVIEW_ROOT:?Set REVIEW_ROOT}:/workspace:ro
+      - ${REVIEW_EVIDENCE_DIR:?Set REVIEW_EVIDENCE_DIR}:/evidence
+    environment:
+      PYTHONPATH: /workspace
+      REVIEW_ROWS: ${REVIEW_ROWS:-10000}
+      CONSUMER_EXCLUSIVE: 'true'
+      KAFKA_DELIVERY_TIMEOUT_MS: '2000'
+      KAFKA_PUBLISH_ATTEMPTS: '2'
+      SYNC_INTERVAL_SECONDS: '5'
+  consumer:
+    environment:
+      CONSUMER_EXCLUSIVE: 'true'

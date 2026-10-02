@@ -1,0 +1,52 @@
+# Disposable regression DB/topic, independent of the user's demo volumes.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: isolated-test-only
+    ports:
+      - '127.0.0.1:${REVIEW_TEST_DB_PORT:-55434}:5432'
+    healthcheck:
+      test: [CMD, pg_isready, -U, postgres]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  broker:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.18
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://broker:9092,external://localhost:${REVIEW_TEST_KAFKA_PORT:-29093}
+    ports:
+      - '127.0.0.1:${REVIEW_TEST_KAFKA_PORT:-29093}:19092'
+    healthcheck:
+      test: [CMD, rpk, cluster, info, -X, brokers=localhost:9092]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  consumer:
+    image: switch-fastapp:local
+    build:
+      context: ..
+    command: [python, -m, app.consumer.main]
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: isolated-test-only
+      KAFKA_BOOTSTRAP_SERVERS: broker:9092
+      KAFKA_TOPIC: regression.orders
+      KAFKA_GROUP_ID: regression.consumer
+      CONSUMER_EXCLUSIVE: 'true'
+    healthcheck:
+      test: [CMD, python, -m, app.healthcheck, worker]
+      interval: 2s
+      timeout: 5s
+      retries: 30

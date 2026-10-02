@@ -1,0 +1,33 @@
+nimcache/
+nimblecache/
+htmldocs/
+.idea/inspectionProfiles/profiles_settings.xml
+.idea/misc.xml
+.idea/modules.xml
+.idea/switch-fastapp.iml
+.idea/vcs.xml
+.idea/workspace.xml
+/docs_use/
+/docs/PL
+
+# Python and local configuration
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.uv-cache/
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+
+# Keep the existing local PL documents private; version the foundation contract.
+!/docs/PL/
+/docs/PL/*
+!/docs/PL/fundament-projektu.md
+/docs/PL
+/docs/review-runs/
