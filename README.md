@@ -1,4 +1,4 @@
-# Switch: Snowflake change pipeline
+# Switch: RC Task
 
 A Python 3.11+ take-home pipeline: a Snowflake adapter publishes versioned order changes to Redpanda; a separate consumer stores every delivery and materializes the latest order in PostgreSQL; FastAPI exposes the delivery log, entity history and statistics.
 
