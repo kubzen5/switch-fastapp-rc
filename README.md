@@ -4,8 +4,6 @@ A Python 3.11+ take-home pipeline: a Snowflake adapter publishes versioned order
 
 **Capture scope:** this implementation reads a controlled, immutable Snowflake journal. Every source write must use the supplied writer and its PostgreSQL lock/fence. Direct DML on an arbitrary Snowflake table is not captured reliably. Multi-tenancy is a design proposal below, not an implemented feature.
 
-Polish preparation: [startup and demo commands](docs/demo-recording.md),
-[30-minute follow-up interview, code walkthrough and live-change exercises](docs/interview-prep.md).
 `make replay-demo` runs a full replay without clearing the sink and restores the previously running workers.
 
 ## Architecture
@@ -207,13 +205,13 @@ make verify-broker       # isolated transport failure scenarios
 
 Tests cover timestamp ties/page boundaries, repeated updates, frozen H, partial-batch restart, stable IDs, schema/money validation, atomic checkpoint/quarantine, real PostgreSQL upsert/rollback, out-of-order versions, replay, offset-commit failure, API filters/pagination/statistics and consumer exclusion. Unit readers/publishers are not represented as real Snowflake/broker integration.
 
-The [correctness review](docs/correctness-review.md), [JUnit](docs/review-tests.xml) and [summary](docs/review-summary.json) record the 2026-10-04 verification: 105 tests (66 unit, 39 integration), all passed without skips, and all 14 phases of a real Snowflake pipeline with replay passed. Replay read 10014 deliveries from offset 0 in all three partitions; 10002 entities and 10010 unique events were unchanged, and the full business SHA-256 matched before/after. Audit deliveries grew from 10014 to 20028. This scenario includes two mutations and quality failures; its counts differ from a demo with one mutation. The results are correctness evidence, not a benchmark. Starlette emits one TestClient/httpx deprecation warning.
+The 2026-10-04 verification passed all 105 tests (66 unit, 39 integration) without skips and all 14 phases of a real Snowflake pipeline with replay. Replay read 10014 deliveries from offset 0 in all three partitions; 10002 entities and 10010 unique events were unchanged, and the full business SHA-256 matched before/after. Audit deliveries grew from 10014 to 20028. This scenario includes two mutations and quality failures; its counts differ from a demo with one mutation. The results are correctness evidence, not a benchmark. Starlette emits one TestClient/httpx deprecation warning.
 
 `make verify` creates unique source/table/topic/group/project names, preserves source tables and volumes for diagnosis, and shuts down its isolated stack on exit. It does not reset the main demo. Untested boundaries include a real interrupted Snowflake COMMIT, DB volume loss, expired topic retention, extended network partitions and multi-broker failure.
 
 ## Replay procedure
 
-The [demo runbook](docs/demo-recording.md) covers startup, mutation, API and replay. `make replay-demo` wraps the existing `scripts/verify_pipeline.py replay` implementation with a private evidence directory and worker restoration. Complete source writes and stop any other producers/consumers of the topic before using it.
+`make replay-demo` wraps the existing `scripts/verify_pipeline.py replay` implementation with a private evidence directory and worker restoration. Complete source writes and stop any other producers/consumers of the topic before using it.
 
 1. Stop the adapter, controlled writers and normal consumer; keep broker, DB and API running. Use `CONSUMER_EXCLUSIVE=true` in the recording stack so a shared PostgreSQL topic lock excludes a second cooperating consumer even with another group ID.
 2. Snapshot business state using `app.db.state.state_fingerprint` and record unique-event counts/checkpoint. The replay helper does this automatically.
