@@ -55,7 +55,7 @@ Edit `.env` privately after copying it and restrict it to the owner (`chmod 600 
 
 `make config` validates Compose without rendering secrets. `make logs` follows JSON worker/API logs. `make down` stops the stack. Existing tables are deliberately not reset by prepare; use the isolated recording scenario for a fresh run without disturbing an existing demo.
 
-For subsequent starts, keep the configured `.env`, run `make up` and check `/stats`; skip `prepare_snowflake.sh`. Snowflake tables survive local container restarts and volume removal. If prepare reports `Prepare requires empty tables`, at least one configured source table already contains rows. Continue with the existing source or use [a fresh isolated demo](docs/demo-recording.md).
+For subsequent starts, keep the configured `.env`, run `make up` and check `/stats`; skip `prepare_snowflake.sh`. Snowflake tables survive local container restarts and volume removal. If prepare reports `Prepare requires empty tables`, at least one configured source table already contains rows. Continue with the existing source or use a fresh isolated demo.
 
 ## Snowflake trial
 
@@ -96,7 +96,7 @@ curl -fsS http://localhost:8000/stats
 
 One mutation inserts one new order, updates the three lowest order keys by `+1.00`, then updates the first again by `+2.00`. It produces **1 insert + 4 update events**, even if the adapter has not read between updates. For an untouched 20000-row demo, convergence means 20005 unique events, 20001 current entities and versions 1/2/3 in `order:1` history. Later mutations continue versions and add another entity. Delivery counts may exceed unique counts after retries; business versions remain deduplicated.
 
-A second CLI prepare against nonempty tables refuses before any data write, reports both row counts and clears its own write fence after the Snowflake connection closes successfully. It never clears an earlier writer's fence. Do not rerun it as a reset. Older images left a fence even on this refusal; rebuilding does not clear that existing fence. For an existing fence or an interrupted writer, stop adapter/writers, determine whether the Snowflake transaction committed, verify current/journal consistency and unique cursor/version pairs, then clear the fence only after reconciliation. See [fence recovery](docs/snowflake.md#rozwiazanie-pozostawionego-fence).
+A second CLI prepare against nonempty tables refuses before any data write, reports both row counts and clears its own write fence after the Snowflake connection closes successfully. It never clears an earlier writer's fence. Do not rerun it as a reset. Older images left a fence even on this refusal; rebuilding does not clear that existing fence. For an existing fence or an interrupted writer, stop adapter/writers, determine whether the Snowflake transaction committed, verify current/journal consistency and unique cursor/version pairs, then clear the fence only after reconciliation.
 
 ## Event contract and partitioning
 
@@ -138,7 +138,7 @@ The guarantee is **at-least-once delivery with idempotent current-state material
 | DB commit succeeds, then Kafka offset commit fails/crash/rebalance occurs | Delivery may repeat. It creates another audit row; the same ID/hash becomes `duplicate` and does not reapply state. |
 | Writer fails or Snowflake commit is uncertain | Durable fence blocks further cooperating sync/writes until manual reconciliation. |
 
-Producer defaults: ACK timeout 10s, 4 application attempts, jitter base 0.5s/cap 5s, shutdown drain 5s. Exhaustion is visible in logs; adapter retries on its next interval. The consumer disables automatic offset commit/store and commits synchronously **after** `materialize()` returns from its transaction. A consumer error exits; Compose restarts it. There is no distributed transaction spanning Snowflake, Kafka and PostgreSQL, and RF=1 provides no broker HA. [Transport reliability details and recorded failures](docs/redpanda-reliability.md).
+Producer defaults: ACK timeout 10s, 4 application attempts, jitter base 0.5s/cap 5s, shutdown drain 5s. Exhaustion is visible in logs; adapter retries on its next interval. The consumer disables automatic offset commit/store and commits synchronously **after** `materialize()` returns from its transaction. A consumer error exits; Compose restarts it. There is no distributed transaction spanning Snowflake, Kafka and PostgreSQL, and RF=1 provides no broker HA.
 
 ## Delivery log, logical events and current state
 
@@ -178,7 +178,7 @@ curl -fsS http://localhost:8000/stats
 
 Use dates enclosing your run. For subsequent pages, replace `after_id` with the response's `next_after_id` and preserve the same filters; the unfiltered example above is independent. `/events` returns delivery audit ordered by `delivery_id ASC`, default limit 100 (1–500). Source/entity/type filters combine with AND; `since/until` are inclusive **occurred_at** bounds and require timezones. The pagination cursor is distinct from the adapter watermark. It reads a live log, not a cross-request snapshot: a late commit of a lower ID can require re-reading from the start. It is an inspection API, not a reliable export protocol.
 
-`/entities/{key}` defaults to `SOURCE_NAME` and returns current state plus paginated delivery history in one DB snapshot; unknown entities return 404. `/stats` uses one snapshot across all sources: counts by type/disposition, adapter rejections, per-source durable watermarks and first-delivery occurred-at → processed-at delay. Replay is excluded from delay samples. Clock skew can make delay negative; this is **not Kafka offset lag**. The local API has no authentication. [Detailed API contract](docs/api.md).
+`/entities/{key}` defaults to `SOURCE_NAME` and returns current state plus paginated delivery history in one DB snapshot; unknown entities return 404. `/stats` uses one snapshot across all sources: counts by type/disposition, adapter rejections, per-source durable watermarks and first-delivery occurred-at → processed-at delay. Replay is excluded from delay samples. Clock skew can make delay negative; this is **not Kafka offset lag**. The local API has no authentication.
 
 ## Tests and verification evidence
 
@@ -194,13 +194,13 @@ make verify-broker       # isolated transport failure scenarios
 
 Tests cover timestamp ties/page boundaries, repeated updates, frozen H, partial-batch restart, stable IDs, schema/money validation, atomic checkpoint/quarantine, real PostgreSQL upsert/rollback, out-of-order versions, replay, offset-commit failure, API filters/pagination/statistics and consumer exclusion. Unit readers/publishers are not represented as real Snowflake/broker integration.
 
-The historical [correctness review](docs/correctness-review.md), [JUnit](docs/review-tests.xml) and [summary](docs/review-summary.json) record a 2026-10-02 run: 97 tests (58 unit, 39 integration), all passed, and a real Snowflake pipeline with replay. The full topic replay read 10014 deliveries from offset 0 in all three partitions; 10002 entities and 10010 unique events were unchanged, and the full business SHA-256 matched before/after. Audit deliveries grew from 10014 to 20028. This historical scenario includes two mutations and quality failures; its counts differ from the single-mutation recording below. The corrected recording commands were also rehearsed on a fresh 10000-row Snowflake source; [demo-verification.json](docs/demo-verification.json) records 10001 unchanged entities, 10005 unchanged logical events and deliveries growing from 10005 to 20010 after replay. Existing evidence is not a new benchmark. Starlette currently emits one TestClient/httpx deprecation warning.
+A historical verification run on 2026-10-02 included 97 tests (58 unit, 39 integration), all passed, and a real Snowflake pipeline with replay. The full topic replay read 10014 deliveries from offset 0 in all three partitions; 10002 entities and 10010 unique events were unchanged, and the full business SHA-256 matched before/after. Audit deliveries grew from 10014 to 20028. This historical scenario includes two mutations and quality failures; its counts differ from the single-mutation demo above. A separate rehearsal on a fresh 10000-row Snowflake source confirmed 10001 unchanged entities, 10005 unchanged logical events and deliveries growing from 10005 to 20010 after replay. These historical results are not a new benchmark. Starlette currently emits one TestClient/httpx deprecation warning.
 
 `make verify` creates unique source/table/topic/group/project names, preserves source tables and volumes for diagnosis, and shuts down its isolated stack on exit. It does not reset the main demo. Untested boundaries include a real interrupted Snowflake COMMIT, DB volume loss, expired topic retention, extended network partitions and multi-broker failure.
 
 ## Replay procedure
 
-The [3–5 minute recording runbook](docs/demo-recording.md) gives copy/paste commands for a fresh isolated stack, initial sync, mutation, `/events`, `/stats` and replay, including expected counts. Its replay uses the existing `scripts/verify_pipeline.py replay` implementation with a mounted evidence directory.
+Replay uses the existing `scripts/verify_pipeline.py replay` implementation with a mounted evidence directory.
 
 1. Stop the adapter, controlled writers and normal consumer; keep broker, DB and API running. Use `CONSUMER_EXCLUSIVE=true` in the recording stack so a shared PostgreSQL topic lock excludes a second cooperating consumer even with another group ID.
 2. Snapshot business state using `app.db.state.state_fingerprint` and record unique-event counts/checkpoint. The replay helper does this automatically.
@@ -208,7 +208,7 @@ The [3–5 minute recording runbook](docs/demo-recording.md) gives copy/paste co
 4. Compare all current entities, versions, payloads, exact amounts, source timestamps and last event IDs via SHA-256; compare unique-event count and checkpoint. Delivery IDs, capture/processing times and audit counts are intentionally excluded. A matching row count alone is insufficient.
 5. Resume normal workers after PASS. The original consumer group's offsets are unchanged; it can redeliver an unacknowledged receipt safely. `auto.offset.reset=earliest` alone does not rewind an existing group's offsets.
 
-For an empty-sink rebuild, `make db-clean-check` previews the scope; `make db-clean-execute` stops workers and clears only sink tables. This is explicitly destructive maintenance, **not needed for the recording**. Replay with a fresh group before resuming the old group; merely starting the old group does not restore deleted sink data. `SCOPE=pipeline` also deletes adapter checkpoints and causes republishing; neither scope changes Snowflake or Kafka offsets. See [maintenance details](docs/api.md#automatyczne-sprawdzenie-i-czyszczenie-danych).
+For an empty-sink rebuild, `make db-clean-check` previews the scope; `make db-clean-execute` stops workers and clears only sink tables. This is explicitly destructive maintenance, **not needed for the recording**. Replay with a fresh group before resuming the old group; merely starting the old group does not restore deleted sink data. `SCOPE=pipeline` also deletes adapter checkpoints and causes republishing; neither scope changes Snowflake or Kafka offsets.
 
 ## Timebox, scope cuts and next improvements
 
@@ -216,7 +216,7 @@ The author's reported effort is **approximately 8 hours**, including implementat
 
 Scope cuts: no multi-tenancy implementation, arbitrary-table CDC, hard/soft delete, schema drift evolution, schema registry, transactional outbox, cross-system exactly-once delivery, automated fence recovery, API authentication, HA deployment, distributed worker leases, credential rotation or metrics dashboards. Consumer deduplication is implemented; no separate stretch-goal implementation is claimed. The fixed order schema and controlled writer favor demonstrable correctness within a bounded demo.
 
-With more time: add policy-compatible key-pair/OAuth authentication and least-privilege roles first; move source capture to a Snowflake Stream plus durable outbox with an explicit retention/recovery policy; add bounded asynchronous publishing with batch ACK tracking, consumer connection pooling/batched transactions, proper Kafka lag metrics and alerts for fences/retries/quarantine; implement deletes and schema evolution with migrations/replay tests; add longer failure tests, backups and an access/retention model for raw audit data. [Interview preparation: ten code-specific questions](docs/interview-prep.md).
+With more time: add policy-compatible key-pair/OAuth authentication and least-privilege roles first; move source capture to a Snowflake Stream plus durable outbox with an explicit retention/recovery policy; add bounded asynchronous publishing with batch ACK tracking, consumer connection pooling/batched transactions, proper Kafka lag metrics and alerts for fences/retries/quarantine; implement deletes and schema evolution with migrations/replay tests; add longer failure tests, backups and an access/retention model for raw audit data.
 
 ## Extension to multi-tenancy (design only)
 
@@ -231,4 +231,4 @@ At 100 tenants × 10 sources, deploy a bounded worker pool rather than 1000 cont
 | Resources | Per-tenant/source rate limits, bounded queues, retry budgets and warehouse/query caps; separate connection pools and fair scheduling. Isolate large snapshots from incremental jobs; dedicate topics/workers/warehouses for heavy tenants as needed. |
 | Observability/replay | Tenant-scoped counters, Kafka lag, checkpoint age, fence/quarantine alerts and replay locks/evidence. Authorize one tenant's replay without exposing another tenant's raw deliveries. |
 
-Current bottlenecks are per-record ACK publication, repeated journal window scans, per-message DB connection/transaction/offset commit and full-history `/stats` scans. Measure workload and lag before choosing pool sizes or adding partitions; preserve per-entity order and atomic DB decisions while batching. [Secret/history audit and submission checklist](docs/submission-readiness.md).
+Current bottlenecks are per-record ACK publication, repeated journal window scans, per-message DB connection/transaction/offset commit and full-history `/stats` scans. Measure workload and lag before choosing pool sizes or adding partitions; preserve per-entity order and atomic DB decisions while batching.
