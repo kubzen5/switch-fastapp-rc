@@ -4,6 +4,10 @@ A Python 3.11+ take-home pipeline: a Snowflake adapter publishes versioned order
 
 **Capture scope:** this implementation reads a controlled, immutable Snowflake journal. Every source write must use the supplied writer and its PostgreSQL lock/fence. Direct DML on an arbitrary Snowflake table is not captured reliably. Multi-tenancy is a design proposal below, not an implemented feature.
 
+Polish preparation: [startup and demo commands](docs/demo-recording.md),
+[30-minute follow-up interview, code walkthrough and live-change exercises](docs/interview-prep.md).
+`make replay-demo` runs a full replay without clearing the sink and restores the previously running workers.
+
 ## Architecture
 
 ```text
@@ -97,6 +101,15 @@ curl -fsS http://localhost:8000/stats
 One mutation inserts one new order, updates the three lowest order keys by `+1.00`, then updates the first again by `+2.00`. It produces **1 insert + 4 update events**, even if the adapter has not read between updates. For an untouched 20000-row demo, convergence means 20005 unique events, 20001 current entities and versions 1/2/3 in `order:1` history. Later mutations continue versions and add another entity. Delivery counts may exceed unique counts after retries; business versions remain deduplicated.
 
 A second CLI prepare against nonempty tables refuses before any data write, reports both row counts and clears its own write fence after the Snowflake connection closes successfully. It never clears an earlier writer's fence. Do not rerun it as a reset. Older images left a fence even on this refusal; rebuilding does not clear that existing fence. For an existing fence or an interrupted writer, stop adapter/writers, determine whether the Snowflake transaction committed, verify current/journal consistency and unique cursor/version pairs, then clear the fence only after reconciliation.
+
+To import more sample orders into an existing prepared demo:
+
+```sh
+bash scripts/append_snowflake.sh --rows 10000
+curl -fsS http://localhost:8000/stats
+```
+
+The script defaults to 10000 rows and accepts 1–50000 per run. It builds the writer image and uses the existing running PostgreSQL service; start the stack with `make up` first. Each invocation imports the next unused keys from the ORDERS/CUSTOMER sample join, preserving all existing orders, including orders created by mutations or the simulator. New orders have version 1 and type `insert`, with a timestamp strictly after the existing journal watermark. The current rows and journal entries commit together under the shared source lock/fence. The output reports `requested`, `added` and `total_orders`; if fewer sample orders remain, it adds only those remaining, and an exhausted source reports `added=0`. Repeated runs import further unused orders. The running adapter ingests them automatically after the writer releases the lock; `/stats` may be partial until it catches up. An uncertain write or connection close leaves the fence in place for reconciliation as with the other controlled writers.
 
 ## Event contract and partitioning
 
@@ -194,13 +207,13 @@ make verify-broker       # isolated transport failure scenarios
 
 Tests cover timestamp ties/page boundaries, repeated updates, frozen H, partial-batch restart, stable IDs, schema/money validation, atomic checkpoint/quarantine, real PostgreSQL upsert/rollback, out-of-order versions, replay, offset-commit failure, API filters/pagination/statistics and consumer exclusion. Unit readers/publishers are not represented as real Snowflake/broker integration.
 
-A historical verification run on 2026-10-02 included 97 tests (58 unit, 39 integration), all passed, and a real Snowflake pipeline with replay. The full topic replay read 10014 deliveries from offset 0 in all three partitions; 10002 entities and 10010 unique events were unchanged, and the full business SHA-256 matched before/after. Audit deliveries grew from 10014 to 20028. This historical scenario includes two mutations and quality failures; its counts differ from the single-mutation demo above. A separate rehearsal on a fresh 10000-row Snowflake source confirmed 10001 unchanged entities, 10005 unchanged logical events and deliveries growing from 10005 to 20010 after replay. These historical results are not a new benchmark. Starlette currently emits one TestClient/httpx deprecation warning.
+The [correctness review](docs/correctness-review.md), [JUnit](docs/review-tests.xml) and [summary](docs/review-summary.json) record the 2026-10-04 verification: 105 tests (66 unit, 39 integration), all passed without skips, and all 14 phases of a real Snowflake pipeline with replay passed. Replay read 10014 deliveries from offset 0 in all three partitions; 10002 entities and 10010 unique events were unchanged, and the full business SHA-256 matched before/after. Audit deliveries grew from 10014 to 20028. This scenario includes two mutations and quality failures; its counts differ from a demo with one mutation. The results are correctness evidence, not a benchmark. Starlette emits one TestClient/httpx deprecation warning.
 
 `make verify` creates unique source/table/topic/group/project names, preserves source tables and volumes for diagnosis, and shuts down its isolated stack on exit. It does not reset the main demo. Untested boundaries include a real interrupted Snowflake COMMIT, DB volume loss, expired topic retention, extended network partitions and multi-broker failure.
 
 ## Replay procedure
 
-Replay uses the existing `scripts/verify_pipeline.py replay` implementation with a mounted evidence directory.
+The [demo runbook](docs/demo-recording.md) covers startup, mutation, API and replay. `make replay-demo` wraps the existing `scripts/verify_pipeline.py replay` implementation with a private evidence directory and worker restoration. Complete source writes and stop any other producers/consumers of the topic before using it.
 
 1. Stop the adapter, controlled writers and normal consumer; keep broker, DB and API running. Use `CONSUMER_EXCLUSIVE=true` in the recording stack so a shared PostgreSQL topic lock excludes a second cooperating consumer even with another group ID.
 2. Snapshot business state using `app.db.state.state_fingerprint` and record unique-event counts/checkpoint. The replay helper does this automatically.

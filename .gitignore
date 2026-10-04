@@ -31,3 +31,5 @@ dist/
 !/docs/PL/fundament-projektu.md
 /docs/PL
 /docs/review-runs/
+/docs
+README_PL.md

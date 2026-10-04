@@ -87,3 +87,62 @@ def test_prepare_does_not_clear_fence_from_an_earlier_writer(monkeypatch, writer
         demo.main()
     coordinator.execute.assert_not_called()
     snowflake.close.assert_not_called()
+
+
+@pytest.mark.parametrize('rows,expected', [([], 10000), (['--rows', '1'], 1), (['--rows', '50000'], 50000)])
+def test_append_cli_reports_actual_rows_and_clears_fence_after_close(monkeypatch, writer, capsys, rows, expected):
+    coordinator, snowflake = writer
+    monkeypatch.setattr('sys.argv', ['demo', 'append', *rows])
+    append = Mock(return_value=(1, 20001))
+    monkeypatch.setattr(demo, 'append_orders', append)
+    coordinator.execute.side_effect = lambda sql, params: (
+        snowflake.close.assert_called_once() if 'blocked=false' in sql else None
+    )
+    demo.main()
+    assert append.call_args.args[2] == expected
+    assert coordinator.execute.call_count == 2
+    assert f'requested={expected} added=1 total_orders=20001' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('rows', ['0', '-1', '50001', 'invalid'])
+def test_append_cli_rejects_invalid_count_before_connecting(monkeypatch, writer, rows):
+    coordinator, snowflake = writer
+    monkeypatch.setattr('sys.argv', ['demo', 'append', '--rows', rows])
+    with pytest.raises(SystemExit) as caught:
+        demo.main()
+    assert caught.value.code == 2
+    coordinator.execute.assert_not_called()
+    snowflake.close.assert_not_called()
+
+
+def test_append_refusal_clears_its_fence_after_close(monkeypatch, writer, capsys):
+    coordinator, snowflake = writer
+    monkeypatch.setattr('sys.argv', ['demo', 'append'])
+    monkeypatch.setattr(demo, 'append_orders', Mock(side_effect=demo.AppendRefused('Run prepare first')))
+    coordinator.execute.side_effect = lambda sql, params: (
+        snowflake.close.assert_called_once() if 'blocked=false' in sql else None
+    )
+    with pytest.raises(SystemExit) as caught:
+        demo.main()
+    assert caught.value.code == 1
+    assert 'Source fence cleared after append refusal' in capsys.readouterr().err
+    assert coordinator.execute.call_count == 2
+
+
+@pytest.mark.parametrize('failure', ['connect', 'write', 'close'])
+def test_uncertain_append_retains_fence(monkeypatch, writer, failure):
+    coordinator, snowflake = writer
+    monkeypatch.setattr('sys.argv', ['demo', 'append'])
+    append = Mock(return_value=(10, 20010))
+    monkeypatch.setattr(demo, 'append_orders', append)
+    error = RuntimeError('uncertain outcome')
+    if failure == 'connect':
+        monkeypatch.setattr(demo, 'connect_source', Mock(side_effect=error))
+    elif failure == 'write':
+        append.side_effect = error
+    else:
+        snowflake.close.side_effect = error
+    with pytest.raises(RuntimeError, match='uncertain outcome'):
+        demo.main()
+    assert coordinator.execute.call_count == 1
+    assert 'blocked=true' in coordinator.execute.call_args.args[0]
